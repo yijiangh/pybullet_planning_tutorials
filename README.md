@@ -9,7 +9,7 @@ In your conda environment, run:
 pip install git+https://github.com/yijiangh/pybullet_planning@dev#egg=pybullet_planning
 ```
 
-This will both install [pybullet](https://github.com/bulletphysics/bullet3) and [pybullet_planning](https://github.com/yijiangh/pybullet_planning).
+This will install both [pybullet](https://github.com/bulletphysics/bullet3) and [pybullet_planning](https://github.com/yijiangh/pybullet_planning).
 
 We also use `termcolor` to do colorful terminal printing in this tutorial, install it by:
 ```
@@ -44,7 +44,7 @@ Run by (in `.\integral_time_joints` the root directory):
 
 ```python -m examples.pybullet_demo -d UR```
 
-<img src='images/ur.png' width="60%"/>
+<img src='images/UR.png' width="60%"/>
 
 ### RFL demo
 Run by (in `.\integral_time_joints` the root directory):
