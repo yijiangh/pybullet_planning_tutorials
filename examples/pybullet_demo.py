@@ -4,11 +4,11 @@ import numpy as np
 import argparse
 from termcolor import cprint
 
-from pybullet_planning import BASE_LINK
+from pybullet_planning import BASE_LINK, RED, BLUE, GREEN
 from pybullet_planning import load_pybullet, connect, wait_for_user, LockRenderer, has_gui, WorldSaver, HideOutput, \
-    reset_simulation, disconnect, set_camera_pose, has_gui, set_camera, wait_for_duration
+    reset_simulation, disconnect, set_camera_pose, has_gui, set_camera, wait_for_duration, wait_if_gui, apply_alpha
 from pybullet_planning import Pose, Point, Euler
-from pybullet_planning import multiply, invert
+from pybullet_planning import multiply, invert, get_distance
 from pybullet_planning import create_obj, create_attachment, Attachment
 from pybullet_planning import link_from_name, get_link_pose, get_moving_links, get_link_name, get_disabled_collisions, \
     get_body_body_disabled_collisions, has_link, are_links_adjacent
@@ -16,6 +16,7 @@ from pybullet_planning import get_num_joints, get_joint_names, get_movable_joint
     joints_from_names, get_sample_fn, plan_joint_motion
 from pybullet_planning import dump_world, set_pose
 from pybullet_planning import get_collision_fn, get_floating_body_collision_fn, expand_links, create_box
+from pybullet_planning import pairwise_collision, pairwise_collision_info, draw_collision_diagnosis, body_collision_info
 
 HERE = os.path.dirname(__file__)
 UR_ROBOT_URDF = os.path.join(HERE, 'data', 'universal_robot', 'ur_description', 'urdf', 'ur5.urdf')
@@ -26,8 +27,78 @@ EE_PATH = os.path.join(HERE, 'data', 'dms_bar_gripper.obj')
 ATTACH_OBJ_PATH = os.path.join(HERE, 'data', 'bar_attachment.obj')
 OBSTACLE_OBJ_PATH = os.path.join(HERE, 'data', 'box_obstacle.obj')
 DUCK_OBJ_PATH = os.path.join(HERE, 'data', 'duck.obj')
+ASSEMBLY_OBJ_DIR = os.path.join(HERE, 'data', 'kathrin_assembly')
 
-TUTORIALS = {'DUCK', 'UR', 'RFL'}
+TUTORIALS = {'DUCK', 'UR', 'RFL', 'Assembly'}
+
+def assembly_demo(viewer=True, debug=False):
+    connect(use_gui=viewer)
+
+    # * zoom in so we can see it, this is optional
+    camera_base_pt = (0,0,0)
+    camera_pt = np.array(camera_base_pt) + np.array([0.1, -0.1, 0.1])
+    set_camera_pose(tuple(camera_pt), camera_base_pt)
+
+    # * a simple example showing two artificial beam colliding at the interface
+    # compare this "brep-like" approach to the mesh approach below,
+    # here we have less numerical error at the interface
+    cprint('='*10)
+    cprint('Checking collisions between two created boxes.', 'cyan')
+    w = 0.05
+    l = 0.5
+    h = 0.01
+    eps_list = [-1e-14, 0, 1e-3, 1e-6, 1e-14]
+    b0_body = create_box(w, l, h, color=apply_alpha(RED, 0.5))
+    b1_body = create_box(w, l, h, color=apply_alpha(BLUE, 0.5))
+    for eps in eps_list:
+        print('='*5)
+        cprint('Pertubation distance: {}'.format(eps), 'yellow')
+        # the beam on the right is perturbed towards left by eps
+        set_pose(b0_body, Pose(point=[0,l/2-eps,0]))
+        set_pose(b1_body, Pose(point=[0,-l/2,0]))
+
+        is_collided = pairwise_collision(b0_body, b1_body)
+        if is_collided:
+            cprint('Collision detected! The penetration depth shown below should be close to eps={}'.format(eps), 'red')
+            cr = pairwise_collision_info(b0_body, b1_body)
+            draw_collision_diagnosis(cr, focus_camera=True)
+        else:
+            cprint('No collision detected between b0 and b1.', 'green')
+        assert eps <= 0 or is_collided
+
+    # * now let's load Kathrin's beams and check pairwise collision among them
+    # notice that in pybullet everything is in METER, and each beam is configured at its pose in the world
+    # already in the obj files (directly exported from Rhino).
+    cprint('='*10)
+    cprint('Checking collisions among loaded obj elements.', 'cyan')
+    beam_from_names = {}
+    for i in range(150):
+        beam_path = os.path.join(ASSEMBLY_OBJ_DIR, 'element_{}.obj'.format(i))
+        beam_from_names[i] = create_obj(beam_path, scale=1, color=apply_alpha(BLUE, 0.2))
+
+    collided_pairs = set()
+    for i in range(150):
+        for j in range(i+1, 150):
+            if (i, j) not in collided_pairs and (j, i) not in collided_pairs:
+                if pairwise_collision(beam_from_names[i], beam_from_names[j]):
+                    # using meshes (comparing to the `create_box` approach above) induces numerical errors
+                    # in our case here the touching faces will be checked as collisions.
+                    # Thus, we have to query the getClosestPoint info and use the penetration depth to filter these "touching" cases out
+                    # reference for these info: https://docs.google.com/document/d/10sXEhzFRSnvFcl3XxNGhnD4N2SedqwdAvK3dsihxVUA/edit#heading=h.cb0co8y2vuvc
+                    cr = body_collision_info(beam_from_names[i], beam_from_names[j])
+                    penetration_depth = get_distance(cr[0][5], cr[0][6])
+                    # this numner `3e-3` below is based on some manual experiement, 
+                    # might need to be changed accordingly for specific scales and input models
+                    if penetration_depth > 3e-3:
+                        cprint('({}-{}) colliding : penetrating depth {:.4E}'.format(i,j, penetration_depth), 'red')
+                        collided_pairs.add((i,j))
+                        if debug:
+                            draw_collision_diagnosis(cr, focus_camera=False)
+
+    # all the colliding information is in `collided_pairs`
+    cprint('In total we\'ve found {} collided element pairs!'.format(len(collided_pairs)), 'green')
+    wait_if_gui('End.')
+
 
 def duck_demo(viewer=True):
     connect(use_gui=viewer)
@@ -320,6 +391,7 @@ def main():
     parser.add_argument('-nv', '--noviewer', action='store_true', help='Enables the viewer during planning, default True')
     parser.add_argument('-d', '--demo', default='UR', choices=TUTORIALS, \
         help='The name of the demo')
+    parser.add_argument('-db', '--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
     print('Arguments:', args)
 
@@ -329,6 +401,8 @@ def main():
         duck_demo(viewer=not args.noviewer)
     elif args.demo == 'RFL':
         rfl_demo(viewer=not args.noviewer)
+    elif args.demo == 'Assembly':
+        assembly_demo(viewer=not args.noviewer, debug=args.debug)
     else:
         raise NotImplementedError()
 
